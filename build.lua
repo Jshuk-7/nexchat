@@ -1,8 +1,10 @@
-workspace "PROJECT_NAME"
+workspace "nexchat"
     architecture "x64"
     configurations { "Debug", "Release", "Dist" }
 
 OutputDir = "%{cfg.system}-%{cfg.architecture}/%{cfg.buildcfg}"
 
-include "core/build-core.lua"
-include "app/build-app.lua"
+include "libcommon/build-libcommon.lua"
+
+include "server/build-server.lua"
+include "client/build-client.lua"

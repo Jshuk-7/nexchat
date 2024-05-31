@@ -1,8 +1,8 @@
-#include "core.h"
+#include "libcommon.h"
 
 #include <stdio.h>
 
-void core_test()
+void common_test()
 {
     printf("Hello, World!\n");
 }

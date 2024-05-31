@@ -1,5 +1,5 @@
-project "app"
-   kind "ConsoleApp"
+project "libcommon"
+   kind "StaticLib"
    language "C"
    cdialect "C99"
    targetdir "bin/%{cfg.buildcfg}"
@@ -9,15 +9,7 @@ project "app"
 
    includedirs
    {
-      "src",
-
-	  -- Include Core
-	  "../core/src"
-   }
-
-   links
-   {
-      "core"
+      "src"
    }
 
    targetdir ("../bin/" .. OutputDir .. "/%{prj.name}")
