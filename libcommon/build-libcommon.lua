@@ -1,7 +1,7 @@
 project "libcommon"
    kind "StaticLib"
    language "C"
-   cdialect "C99"
+   cdialect "gnu99"
    targetdir "bin/%{cfg.buildcfg}"
    staticruntime "off"
 

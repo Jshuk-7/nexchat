@@ -1,7 +1,7 @@
 project "client"
    kind "ConsoleApp"
    language "C"
-   cdialect "C99"
+   cdialect "gnu99"
    targetdir "bin/%{cfg.buildcfg}"
    staticruntime "off"
 
@@ -12,12 +12,13 @@ project "client"
       "src",
 
 	  -- include libcommon
-	  "../libcommon/src"
+	  "../libcommon/src",
    }
 
    links
    {
-      "libcommon"
+      "libcommon",
+      "pthread",
    }
 
    targetdir ("../bin/" .. OutputDir .. "/%{prj.name}")
