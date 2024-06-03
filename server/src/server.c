@@ -26,7 +26,7 @@ typedef struct nexchat_server_state_t
 typedef struct nexchat_client_thread_data_t
 {
     nexchat_server_state_t* server_state;
-    nexchat_client_state_t* client_state;
+    size_t client_index;
 } nexchat_client_thread_data_t;
 
 typedef struct nexchat_conn_accept_result_t
@@ -161,17 +161,16 @@ void nexchat_server_launch(nexchat_server_state_t* state)
             snprintf(client->username, sizeof(client->username) - 1, "%s\0", result.username);
             client->connected = true;
 
+            // launch client recv thread
+            nexchat_client_thread_data_t client_thread_data = {.server_state=state, .client_index=i};
+            pthread_create(&client->recv_thread, NULL, nexchat_server_handle_client, &client_thread_data);
+            pthread_detach(client->recv_thread);
+            
+            pthread_mutex_unlock(&state->clients_mutex);
+
             char sendbuf[1024];
             snprintf(sendbuf, sizeof(sendbuf) - 1, "%s connected\0", client->username);
             nexchat_server_broadcast_msg(state, client, "server", sendbuf);
-
-            // launch client recv thread
-            nexchat_client_thread_data_t client_thread_data;
-            client_thread_data.server_state = state;
-            client_thread_data.client_state = client;
-            pthread_create(&client->recv_thread, NULL, nexchat_server_handle_client, &client_thread_data);
-            
-            pthread_mutex_unlock(&state->clients_mutex);
 
             found_empty_slot = true;
             break;
@@ -223,8 +222,6 @@ nexchat_conn_accept_result_t nexchat_server_accept_connection(nexchat_server_sta
     recvbuf[bytesread] = '\0';
     snprintf(result.username, sizeof(result.username) - 1, "%s\0", recvbuf);
 
-    printf("bytesread: %zu, username: %s, strlen: %zu\n", bytesread, result.username, strlen(result.username));
-
     char ipstr[INET6_ADDRSTRLEN];
     const void* addr = nexchat_get_inet_addr((struct sockaddr*)&conninfo);
 
@@ -237,12 +234,18 @@ nexchat_conn_accept_result_t nexchat_server_accept_connection(nexchat_server_sta
 void* nexchat_server_handle_client(void* arg)
 {
     nexchat_client_thread_data_t* data = (nexchat_client_thread_data_t*)arg;
+    nexchat_client_state_t* client = &data->server_state->clients[data->client_index];
 
     char recvbuf[1024];
 
-    while (data->server_state->running)
+    while (client->connected && data->server_state->running)
     {
-        int32_t bytesread = nexchat_server_recvmsg(data->client_state->sockfd, recvbuf, sizeof recvbuf);
+        int32_t bytesread = nexchat_server_recvmsg(client->sockfd, recvbuf, sizeof recvbuf);
+
+        if (strlen(client->username) == 6)
+        {
+            int a = 10;
+        }
 
         if (bytesread == -1)
         {
@@ -251,14 +254,14 @@ void* nexchat_server_handle_client(void* arg)
         }
         else if (bytesread == 0) // client disconnected
         {
-            nexchat_server_disconnect_client(data->server_state, data->client_state->sockfd);
+            nexchat_server_disconnect_client(data->server_state, client->sockfd);
             break;
         }
 
         recvbuf[bytesread] = '\0';
 
-        printf("%s: %s\n", data->client_state->username, recvbuf);
-        nexchat_server_broadcast_msg(data->server_state, data->client_state, data->client_state->username, recvbuf);
+        printf("%s: %s\n", client->username, recvbuf);
+        nexchat_server_broadcast_msg(data->server_state, client, client->username, recvbuf);
     }
 
     return NULL;
@@ -290,12 +293,7 @@ void nexchat_server_broadcast_msg(nexchat_server_state_t* state, nexchat_client_
     {
         nexchat_client_state_t* client = &state->clients[i];
 
-        if (!client->connected)
-        {
-            continue;
-        }
-
-        if (client->sockfd == sender->sockfd)
+        if (!client->connected || client->sockfd == sender->sockfd)
         {
             continue;
         }
@@ -315,15 +313,15 @@ void nexchat_server_disconnect_client(nexchat_server_state_t* state, int32_t soc
             continue;
         }
 
-        pthread_mutex_lock(&state->clients_mutex);
-
         printf("server: %s disconnected\n", client->username);
         char sendbuf[1024];
         snprintf(sendbuf, sizeof(sendbuf) - 1, "%s disconnected\0", client->username);
         nexchat_server_broadcast_msg(state, client, "server", sendbuf);
 
+        pthread_mutex_lock(&state->clients_mutex);
+
         client->connected = false;
-        pthread_cancel(client->recv_thread);
+        pthread_join(client->recv_thread, NULL);
         close(client->sockfd);
 
         pthread_mutex_unlock(&state->clients_mutex);

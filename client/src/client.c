@@ -79,24 +79,20 @@ int32_t nexchat_client_connect_to_host(nexchat_client_state_t* state, nexchat_in
 int32_t nexchat_client_send_username_to_host(nexchat_client_state_t* state)
 {
     // send the host our username
-    bool first_try = true;
+    bool first_attempt = true;
 
     memset(state->username, 0, sizeof(state->username));
-    state->username[sizeof(state->username) - 1] = '\0';
-
-    char empty_username[64] = { 0 };
-    empty_username[sizeof(empty_username) - 1] = '\0';
 
     do 
     {
-        if (!first_try)
+        if (!first_attempt)
         {
             printf("Username must not be empty!\n\n");
         }
         printf("Enter username: ");
         fgets(state->username, sizeof(state->username) - 1, stdin);
-        first_try = false;
-    } while (strcmp(state->username, empty_username) == 0);
+        first_attempt = false;
+    } while (strcmp(state->username, "\n") == 0);
 
     for (size_t i = 0; state->username[i] != '\0'; i++)
     {
@@ -117,8 +113,6 @@ int32_t nexchat_client_send_username_to_host(nexchat_client_state_t* state)
         return -1;
     }
 
-    printf("%s, %zu, bytessent: %zu\n", state->username, strlen(state->username), bytessent);
-
     return 0;
 }
 
@@ -127,6 +121,7 @@ void nexchat_client_launch(nexchat_client_state_t* state)
     state->connected = true;
 
     pthread_create(&state->recv_thread, NULL, nexchat_client_handle_incoming_msgs, state);
+    pthread_detach(state->recv_thread);
 
     char sendbuf[1024];
 
@@ -188,7 +183,7 @@ void nexchat_client_sendmsg(int32_t sockfd, const char* msg)
 int main(int argc, char** argv)
 {
     nexchat_client_state_t client;
-    nexchat_inet_id_t id = {.ipaddr=IPADDR, .service=PORT};
+    nexchat_inet_id_t id = {.ipaddr=IPADDR, .service=NULL};
 
     if (nexchat_client_connect_to_host(&client, &id) == -1)
     {
