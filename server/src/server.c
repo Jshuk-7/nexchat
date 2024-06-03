@@ -19,6 +19,7 @@ typedef struct nexchat_server_state_t
 {
     int32_t sockfd;
     nexchat_client_state_t clients[MAXCLIENTS];
+    size_t connected_clients;
     pthread_mutex_t clients_mutex;
     bool running;
 } nexchat_server_state_t;
@@ -34,6 +35,48 @@ typedef struct nexchat_conn_accept_result_t
     int32_t connfd;
     char username[64];
 } nexchat_conn_accept_result_t;
+
+typedef enum nexchat_client_command_t
+{
+    CMD_NONE,
+    CMD_SETUSERNAME,
+    CMD_LISTUSERS,
+    CMD_KICKUSER,
+    CMD_MAXCOMMANDS,
+} nexchat_client_command_t;
+
+const char* nexchat_client_command_to_str(nexchat_client_command_t cmd)
+{
+    switch (cmd)
+    {
+        case CMD_SETUSERNAME: return "set-username";
+        case CMD_LISTUSERS: return "list-users";
+        case CMD_KICKUSER: return "kick-user";
+    }
+
+    return "none";
+}
+
+nexchat_client_command_t nexchat_client_command_from_str(const char* str)
+{
+    if (strcmp(str, "set-username") == 0) return CMD_SETUSERNAME;
+    if (strcmp(str, "list-users") == 0) return CMD_LISTUSERS;
+    if (strcmp(str, "kick-user") == 0) return CMD_KICKUSER;
+
+    return CMD_NONE;
+}
+
+const char* nexchat_client_command_get_desc(nexchat_client_command_t cmd)
+{
+    switch (cmd)
+    {
+        case CMD_SETUSERNAME: return "Set a new username";
+        case CMD_LISTUSERS: return "List all users in the chat";
+        case CMD_KICKUSER: return "Vote to kick a user from the chat. If the majority agrees, the user will be kicked.";
+    }
+
+    return "none";
+}
 
 const void* nexchat_get_inet_addr(struct sockaddr* sa)
 {
@@ -52,8 +95,10 @@ nexchat_conn_accept_result_t nexchat_server_accept_connection(nexchat_server_sta
 void* nexchat_server_handle_client(void* arg);
 void nexchat_server_sendmsg(int32_t sockfd, const char* msg);
 int32_t nexchat_server_recvmsg(int32_t sockfd, char* recvbuf, size_t size);
+void nexchat_server_send_cmdlist_to_client(int32_t sockfd);
 void nexchat_server_broadcast_msg(nexchat_server_state_t* state, nexchat_client_state_t* sender, const char* username, const char* msg);
 void nexchat_server_disconnect_client(nexchat_server_state_t* state, int32_t sockfd);
+void nexchat_server_kick_client(nexchat_server_state_t* state, int32_t sockfd);
 
 int32_t nexchat_server_bind(nexchat_server_state_t* state, const nexchat_inet_id_t* id)
 {
@@ -122,6 +167,7 @@ void nexchat_server_launch(nexchat_server_state_t* state)
     }
     
     state->running = true;
+    state->connected_clients = 0;
     pthread_mutex_init(&state->clients_mutex, NULL);
 
     for (size_t i = 0; i < MAXCLIENTS; i++)
@@ -166,11 +212,17 @@ void nexchat_server_launch(nexchat_server_state_t* state)
             pthread_create(&client->recv_thread, NULL, nexchat_server_handle_client, &client_thread_data);
             pthread_detach(client->recv_thread);
             
+            state->connected_clients++;
+
             pthread_mutex_unlock(&state->clients_mutex);
 
             char sendbuf[1024];
             snprintf(sendbuf, sizeof(sendbuf) - 1, "%s connected\0", client->username);
             nexchat_server_broadcast_msg(state, client, "server", sendbuf);
+
+            memset(sendbuf, 0, sizeof sendbuf);
+            snprintf(sendbuf, sizeof(sendbuf) - 1, "type /commands to see a list of commands.\0");
+            nexchat_server_sendmsg(client->sockfd, sendbuf);
 
             found_empty_slot = true;
             break;
@@ -260,8 +312,26 @@ void* nexchat_server_handle_client(void* arg)
 
         recvbuf[bytesread] = '\0';
 
-        printf("%s: %s\n", client->username, recvbuf);
-        nexchat_server_broadcast_msg(data->server_state, client, client->username, recvbuf);
+        if (recvbuf[0] == '/')
+        {
+            if (strcmp(recvbuf, "/commands") == 0)
+            {
+                nexchat_server_send_cmdlist_to_client(client->sockfd);
+            }
+            else
+            {
+                for (size_t i = CMD_NONE + 1; i < CMD_MAXCOMMANDS; i++)
+                {
+                    nexchat_client_command_t cmd = (nexchat_client_command_t)i;
+                    strcmp(recvbuf, nexchat_client_command_to_str(cmd));
+                }
+            }
+        }
+        else
+        {
+            printf("%s: %s\n", client->username, recvbuf);
+            nexchat_server_broadcast_msg(data->server_state, client, client->username, recvbuf);
+        }
     }
 
     return NULL;
@@ -282,6 +352,22 @@ void nexchat_server_sendmsg(int32_t sockfd, const char* msg)
 int32_t nexchat_server_recvmsg(int32_t sockfd, char* recvbuf, size_t size)
 {
     return recv(sockfd, recvbuf, size, 0);
+}
+
+void nexchat_server_send_cmdlist_to_client(int32_t sockfd)
+{
+    char sendbuf[1024];
+    size_t offset = 0;
+
+    for (size_t i = CMD_NONE + 1; i < CMD_MAXCOMMANDS; i++)
+    {
+        nexchat_client_command_t cmd = (nexchat_client_command_t)i;
+        const char* cmdstr = nexchat_client_command_to_str(cmd);
+        const char* cmddesc = nexchat_client_command_get_desc(cmd);
+        offset += snprintf(sendbuf + offset, sizeof(sendbuf) - 1, "  /%s - %s\n", cmdstr, cmddesc);
+    }
+
+    nexchat_server_sendmsg(sockfd, sendbuf);
 }
 
 void nexchat_server_broadcast_msg(nexchat_server_state_t* state, nexchat_client_state_t* sender, const char* username, const char* msg)
@@ -323,8 +409,44 @@ void nexchat_server_disconnect_client(nexchat_server_state_t* state, int32_t soc
         client->connected = false;
         pthread_join(client->recv_thread, NULL);
         close(client->sockfd);
+        client->sockfd = 0;
+        memset(client->username, 0, sizeof(client->username));
+
+        state->connected_clients--;
 
         pthread_mutex_unlock(&state->clients_mutex);
+    }
+}
+
+void nexchat_server_kick_client(nexchat_server_state_t* state, int32_t sockfd)
+{
+    for (size_t i = 0; i < MAXCLIENTS; i++)
+    {
+        nexchat_client_state_t* client = &state->clients[i];
+
+        if (!client->connected || client->sockfd != sockfd)
+        {
+            continue;
+        }
+
+        printf("server: kicked '%s' from chat\n", client->username);
+        char sendbuf[1024];
+        snprintf(sendbuf, sizeof(sendbuf) - 1, "kicked '%s' from chat\0", client->username);
+        nexchat_server_broadcast_msg(state, client, "server", sendbuf);
+
+        pthread_mutex_lock(&state->clients_mutex);
+
+        client->connected = false;
+        pthread_join(client->recv_thread, NULL);
+        close(client->sockfd);
+        client->sockfd = 0;
+        memset(client->username, 0, sizeof(client->username));
+
+        state->connected_clients--;
+
+        pthread_mutex_unlock(&state->clients_mutex);
+
+        break;
     }
 }
 
