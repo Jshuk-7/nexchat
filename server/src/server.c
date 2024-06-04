@@ -542,7 +542,7 @@ void nexchat_server_disconnect_client(nexchat_server_state_t* state, int32_t soc
         pthread_mutex_lock(&state->clients_mutex);
 
         client->connected = false;
-        pthread_join(client->recv_thread, NULL);
+        pthread_cancel(client->recv_thread);
         close(client->sockfd);
         client->sockfd = 0;
         memset(client->username, 0, sizeof(client->username));
@@ -574,7 +574,7 @@ void nexchat_server_kick_client(nexchat_server_state_t* state, int32_t sockfd)
         pthread_mutex_lock(&state->clients_mutex);
 
         client->connected = false;
-        pthread_join(client->recv_thread, NULL);
+        pthead_cancel(client->recv_thread, NULL);
         close(client->sockfd);
         client->sockfd = 0;
         memset(client->username, 0, sizeof(client->username));
