@@ -57,15 +57,6 @@ const char* nexchat_client_command_to_str(nexchat_client_command_t cmd)
     return "none";
 }
 
-nexchat_client_command_t nexchat_client_command_from_str(const char* str)
-{
-    if (strcmp(str, "set-username") == 0) return CMD_SETUSERNAME;
-    if (strcmp(str, "list-users") == 0) return CMD_LISTUSERS;
-    if (strcmp(str, "kick-user") == 0) return CMD_KICKUSER;
-
-    return CMD_NONE;
-}
-
 const char* nexchat_client_command_get_desc(nexchat_client_command_t cmd)
 {
     switch (cmd)
