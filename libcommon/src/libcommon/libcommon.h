@@ -9,6 +9,7 @@ typedef struct nexchat_client_state_t
     int32_t sockfd;
     char username[64];
     pthread_t recv_thread;
+    size_t kicks_requested;
     bool connected;
 } nexchat_client_state_t;
 

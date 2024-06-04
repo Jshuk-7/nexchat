@@ -50,8 +50,8 @@ const char* nexchat_client_command_to_str(nexchat_client_command_t cmd)
     switch (cmd)
     {
         case CMD_SETUSERNAME: return "set-username";
-        case CMD_LISTUSERS: return "list-users";
-        case CMD_KICKUSER: return "kick-user";
+        case CMD_LISTUSERS: return "users";
+        case CMD_KICKUSER: return "kick";
     }
 
     return "none";
@@ -96,6 +96,7 @@ void* nexchat_server_handle_client(void* arg);
 void nexchat_server_sendmsg(int32_t sockfd, const char* msg);
 int32_t nexchat_server_recvmsg(int32_t sockfd, char* recvbuf, size_t size);
 void nexchat_server_send_cmdlist_to_client(int32_t sockfd);
+void nexchat_server_exec_cmd(nexchat_server_state_t* state, nexchat_client_state_t* client, nexchat_client_command_t cmd, size_t argc, const char* argv);
 void nexchat_server_broadcast_msg(nexchat_server_state_t* state, nexchat_client_state_t* sender, const char* username, const char* msg);
 void nexchat_server_disconnect_client(nexchat_server_state_t* state, int32_t sockfd);
 void nexchat_server_kick_client(nexchat_server_state_t* state, int32_t sockfd);
@@ -218,7 +219,7 @@ void nexchat_server_launch(nexchat_server_state_t* state)
 
             char sendbuf[1024];
             snprintf(sendbuf, sizeof(sendbuf) - 1, "%s connected\0", client->username);
-            nexchat_server_broadcast_msg(state, client, "server", sendbuf);
+            nexchat_server_broadcast_msg(state, client, NULL, sendbuf);
 
             memset(sendbuf, 0, sizeof sendbuf);
             snprintf(sendbuf, sizeof(sendbuf) - 1, "type /commands to see a list of commands.\0");
@@ -320,10 +321,39 @@ void* nexchat_server_handle_client(void* arg)
             }
             else
             {
+                bool foundcmd = false;
+
                 for (size_t i = CMD_NONE + 1; i < CMD_MAXCOMMANDS; i++)
                 {
                     nexchat_client_command_t cmd = (nexchat_client_command_t)i;
-                    strcmp(recvbuf, nexchat_client_command_to_str(cmd));
+					const char* cmdstr = nexchat_client_command_to_str(cmd);
+					size_t len = strlen(cmdstr);
+
+                    if (memcmp(&recvbuf[1], cmdstr, len) != 0)
+                    {
+                        continue;
+                    }
+
+					const char* args = NULL;
+					const char* space = strchr(recvbuf, ' ');
+					size_t argc = 0;
+					
+					if (space)
+					{
+						args = &recvbuf[(size_t)(space - recvbuf) + 1];
+						argc++;
+					}
+					
+                    nexchat_server_exec_cmd(data->server_state, client, cmd, argc, args);
+                    foundcmd = true;
+                    break;
+                }
+
+                if (!foundcmd)
+                {
+                    char sendbuf[1024];
+                    snprintf(sendbuf, sizeof(sendbuf) - 1, "server: unknown command '%s'\0", recvbuf);
+                    nexchat_server_sendmsg(client->sockfd, sendbuf);
                 }
             }
         }
@@ -345,8 +375,6 @@ void nexchat_server_sendmsg(int32_t sockfd, const char* msg)
         perror("send");
         return;
     }
-
-    printf("server: sending packet to client, contents: %s\n", msg);
 }
 
 int32_t nexchat_server_recvmsg(int32_t sockfd, char* recvbuf, size_t size)
@@ -370,10 +398,126 @@ void nexchat_server_send_cmdlist_to_client(int32_t sockfd)
     nexchat_server_sendmsg(sockfd, sendbuf);
 }
 
+void nexchat_server_exec_cmd(nexchat_server_state_t* state, nexchat_client_state_t* client, nexchat_client_command_t cmd, size_t argc, const char* args)
+{
+    char sendbuf[1024];
+
+    switch (cmd)
+    {
+        case CMD_SETUSERNAME:
+        {
+            if (argc != 1)
+			{
+				const char* cmdstr = nexchat_client_command_to_str(cmd);
+				snprintf(sendbuf, sizeof(sendbuf) + 1, "server: expected '1' argument to /%s got '%s'\0", cmdstr, argc);
+				nexchat_server_sendmsg(client->sockfd, sendbuf);
+			}
+			else
+			{
+				size_t usernamelen = strlen(args);
+				if (usernamelen >= sizeof client->username)
+				{
+					nexchat_server_sendmsg(client->sockfd, "server: username is too long");
+				}
+				else
+				{
+					size_t oldusernamelen = strlen(client->username);
+					char oldusername[64];
+					memcpy(oldusername, client->username, strlen(client->username));
+					oldusername[oldusernamelen] = '\0';
+
+					pthread_mutex_lock(&state->clients_mutex);
+
+					memcpy(client->username, args, usernamelen);
+
+					pthread_mutex_unlock(&state->clients_mutex);
+
+					printf("server: '%s' set username -> '%s'\n", oldusername, client->username);
+					nexchat_server_sendmsg(client->sockfd, "server: new username set");
+
+					snprintf(sendbuf, sizeof(sendbuf) - 1, "'%s' set username -> '%s'\0", oldusername, client->username);
+					nexchat_server_broadcast_msg(state, client, "server", sendbuf);
+				}
+			}
+        } break;
+        case CMD_LISTUSERS:
+        {
+            size_t offset = 0;
+
+            for (size_t i = 0; i < MAXCLIENTS; i++)
+            {
+                nexchat_client_state_t* c = &state->clients[i];
+                
+                if (!c->connected)
+                {
+                    continue;
+                }
+
+				const char* fmt = c->sockfd == client->sockfd ? "%s (you)\n" : "%s\n";
+                offset += snprintf(sendbuf + offset, sizeof(sendbuf) - 1, fmt, c->username);
+            }
+
+			nexchat_server_sendmsg(client->sockfd, sendbuf);
+        } break;
+        case CMD_KICKUSER:
+        {
+            if (argc != 1)
+			{
+				const char* cmdstr = nexchat_client_command_to_str(cmd);
+				snprintf(sendbuf, sizeof(sendbuf) - 1, "server: expected 1 argument to /%s, got '%zu'\0", cmdstr, argc);
+				nexchat_server_sendmsg(client->sockfd, sendbuf);
+			}
+			else
+			{
+				bool foundclient = false;
+
+				for (size_t i = 0; i < MAXCLIENTS; i++)
+				{
+					nexchat_client_state_t* c = &state->clients[i];
+
+					if (!c->connected || c->sockfd == client->sockfd)
+					{
+						continue;
+					}
+
+					if (strcmp(c->username, args) != 0)
+					{
+						continue;
+					}
+
+					c->kicks_requested++;
+					size_t majority = (state->connected_clients / 2) + state->connected_clients % 2;
+
+					if (c->kicks_requested >= majority)
+					{
+						nexchat_server_kick_client(state, c->sockfd);
+					}
+
+					foundclient = true;
+					break;
+				}
+
+				if (!foundclient)
+				{
+					snprintf(sendbuf, sizeof(sendbuf) + 1, "server: no users named '%s' in the chat\0", args);
+					nexchat_server_sendmsg(client->sockfd, sendbuf);
+				}
+			}
+        } break;
+    }
+}
+
 void nexchat_server_broadcast_msg(nexchat_server_state_t* state, nexchat_client_state_t* sender, const char* username, const char* msg)
 {
     char sendbuf[1024];
-    snprintf(sendbuf, sizeof(sendbuf) - 1, "%s: %s\0", username, msg);
+	if (username)
+	{
+    	snprintf(sendbuf, sizeof(sendbuf) - 1, "%s: %s\0", username, msg);
+	}
+	else
+	{
+		snprintf(sendbuf, sizeof(sendbuf) - 1, "%s\0", msg);
+	}
 
     for (size_t i = 0; i < MAXCLIENTS; i++)
     {
@@ -433,6 +577,8 @@ void nexchat_server_kick_client(nexchat_server_state_t* state, int32_t sockfd)
         char sendbuf[1024];
         snprintf(sendbuf, sizeof(sendbuf) - 1, "kicked '%s' from chat\0", client->username);
         nexchat_server_broadcast_msg(state, client, "server", sendbuf);
+
+		nexchat_server_sendmsg(client->sockfd, "server: you have been kicked from chat");
 
         pthread_mutex_lock(&state->clients_mutex);
 
