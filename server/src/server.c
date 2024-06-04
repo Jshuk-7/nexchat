@@ -537,7 +537,7 @@ void nexchat_server_disconnect_client(nexchat_server_state_t* state, int32_t soc
         printf("server: %s disconnected\n", client->username);
         char sendbuf[1024];
         snprintf(sendbuf, sizeof(sendbuf) - 1, "%s disconnected\0", client->username);
-        nexchat_server_broadcast_msg(state, client, "server", sendbuf);
+        nexchat_server_broadcast_msg(state, client, NULL, sendbuf);
 
         pthread_mutex_lock(&state->clients_mutex);
 
