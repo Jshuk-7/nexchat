@@ -230,6 +230,14 @@ void nexchat_server_launch(nexchat_server_state_t* state)
 
 void nexchat_server_shutdown(nexchat_server_state_t* state)
 {
+    pthread_mutex_lock(&state->clients_mutex);
+    for (size_t i = 0; i < MAXCLIENTS; i++)
+    {
+        nexchat_client_state_t* client = &state->clients[i];
+        pthread_cancel(client->recv_thread);
+    }
+    pthread_mutex_unlock(&state->clients_mutex);
+
     pthread_mutex_destroy(&state->clients_mutex);
 
     printf("server: shutting down...\n");
@@ -574,7 +582,7 @@ void nexchat_server_kick_client(nexchat_server_state_t* state, int32_t sockfd)
         pthread_mutex_lock(&state->clients_mutex);
 
         client->connected = false;
-        pthead_cancel(client->recv_thread, NULL);
+        pthread_cancel(client->recv_thread);
         close(client->sockfd);
         client->sockfd = 0;
         memset(client->username, 0, sizeof(client->username));
